@@ -265,7 +265,7 @@ def analyze_proposal_metrics(client, text, problem_statement):
     
     try:
         chat = client.chats.create(
-            model="gemini-1.5-pro",
+            model="gemini-2.0-flash",
             config=GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.01
@@ -355,7 +355,7 @@ def get_ai_review(client, proposal_text, problem_statement, reviewer_mode=False)
     
     try:
         chat = client.chats.create(
-            model="gemini-1.5-pro",
+            model="gemini-2.0-flash",
             config=GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.01
@@ -388,7 +388,7 @@ def extract_project_timeline(client, proposal_text):
     
     try:
         chat = client.chats.create(
-            model="gemini-1.5-pro", 
+            model="gemini-2.0-flash", 
             config=GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.01
