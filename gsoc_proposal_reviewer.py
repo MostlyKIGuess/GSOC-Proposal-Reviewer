@@ -1,11 +1,8 @@
 import streamlit as st
-import os
-import tempfile
-import PyPDF2
-from google import genai
-from google.genai.types import GenerateContentConfig
 import json
 from datetime import datetime
+from google import genai
+from google.genai.types import GenerateContentConfig, Part
 
 st.set_page_config(
     page_title="GSoC Proposal Reviewer",
@@ -193,24 +190,7 @@ st.markdown("""
 def initialize_genai():
     return genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
-def extract_text_from_pdf(pdf_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp:
-        temp.write(pdf_file.getvalue())
-        temp_path = temp.name
-    
-    try:
-        reader = PyPDF2.PdfReader(temp_path)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text()
-        return text
-    except Exception as e:
-        st.error(f"Error extracting text from PDF: {str(e)}")
-        return ""
-    finally:
-        os.unlink(temp_path)
-
-def analyze_proposal_metrics(client, text, problem_statement):
+def analyze_proposal_metrics(client, pdf_file, problem_statement):
     default_metrics = {
         "technical_depth": 20,
         "project_understanding": 20,
@@ -231,12 +211,10 @@ def analyze_proposal_metrics(client, text, problem_statement):
     - If the proposal doesn't address the problem statement, be harshly critical on project understanding
     - If proposal directly and excellently addresses the problem statement, acknowledge this with appropriate scores
     
-    Your evaluation must be data-driven, based only on what's explicitly in the text."""
+    Your evaluation must be data-driven, based only on what's explicitly in the document."""
     
     user_prompt = f"""
     Problem Statement: {problem_statement}
-    
-    Proposal: {text[:4000]}
     
     Extract the following metrics as a valid JSON object:
 
@@ -296,6 +274,8 @@ def analyze_proposal_metrics(client, text, problem_statement):
     """
     
     try:
+        pdf_part = Part.from_bytes(data=pdf_file.getvalue(), mime_type="application/pdf")
+        
         chat = client.chats.create(
             model="gemini-2.0-flash",
             config=GenerateContentConfig(
@@ -303,7 +283,7 @@ def analyze_proposal_metrics(client, text, problem_statement):
                 temperature=0.2
             )
         )
-        response = chat.send_message(user_prompt)
+        response = chat.send_message([pdf_part, user_prompt])
         
         try:
             json_str = response.text
@@ -330,7 +310,7 @@ def analyze_proposal_metrics(client, text, problem_statement):
         st.error(f"Error analyzing proposal: {str(e)}")
         return default_metrics
 
-def get_ai_review(client, proposal_text, problem_statement, reviewer_mode=False):
+def get_ai_review(client, pdf_file, problem_statement, reviewer_mode=False):
     system_prompt = """You are a balanced GSoC proposal evaluator with high standards. Your task is to provide constructive feedback that is:
     
     - Extremely critical and direct when fundamental elements are missing
@@ -343,8 +323,6 @@ def get_ai_review(client, proposal_text, problem_statement, reviewer_mode=False)
     if reviewer_mode:
         user_prompt = f"""
         Problem Statement: {problem_statement}
-        
-        Proposal: {proposal_text}
         
         As a GSoC project mentor/reviewer, provide a balanced evaluation of this proposal:
         1. Overall assessment - begin by stating whether the proposal directly addresses the problem statement
@@ -368,8 +346,6 @@ def get_ai_review(client, proposal_text, problem_statement, reviewer_mode=False)
         user_prompt = f"""
         Problem Statement: {problem_statement}
         
-        Proposal: {proposal_text}
-        
         Provide constructive feedback on this GSoC proposal:
         1. First, evaluate if your proposal directly addresses the problem statement
         2. Identify both strengths and areas needing improvement
@@ -391,6 +367,8 @@ def get_ai_review(client, proposal_text, problem_statement, reviewer_mode=False)
         """
     
     try:
+        pdf_part = Part.from_bytes(data=pdf_file.getvalue(), mime_type="application/pdf")
+        
         chat = client.chats.create(
             model="gemini-2.0-flash",
             config=GenerateContentConfig(
@@ -398,13 +376,13 @@ def get_ai_review(client, proposal_text, problem_statement, reviewer_mode=False)
                 temperature=0.2
             )
         )
-        response = chat.send_message(user_prompt)
+        response = chat.send_message([pdf_part, user_prompt])
         return response.text
     except Exception as e:
         st.error(f"Error generating AI review: {str(e)}")
         return "Failed to generate review. Please check your API key and try again."
 
-def extract_project_timeline(client, proposal_text):
+def extract_project_timeline(client, pdf_file):
     system_prompt = """You are a GSoC timeline analyzer who looks for explicitly mentioned project schedules or timelines.
     
     Your evaluation approach:
@@ -415,26 +393,26 @@ def extract_project_timeline(client, proposal_text):
     
     A valid timeline must have specific time periods (dates, weeks, months) with corresponding activities or deliverables."""
     
-    user_prompt = f"""
+    user_prompt = """
     From the following GSoC proposal, extract the project timeline or schedule.
     Format as JSON with keys as milestone dates/weeks and values as the task descriptions.
-    
-    Proposal: {proposal_text[:5000]}
     
     INSTRUCTIONS:
     - Look for any explicitly defined timeline, schedule, or work plan
     - If a clear timeline exists, extract it accurately with time periods as keys
     - Consider various formats (tables, lists, phases, etc.)
     - If no explicit timeline exists, return this exact JSON:
-      {{
+      {
         "No Timeline": "The proposal does not contain a clear timeline or schedule."
-      }}
+      }
     - If timeline is vaguely mentioned without specific periods and tasks, also return "No Timeline"
     
     A valid timeline must have specific time periods with corresponding tasks or deliverables.
     """
     
     try:
+        pdf_part = Part.from_bytes(data=pdf_file.getvalue(), mime_type="application/pdf")
+        
         chat = client.chats.create(
             model="gemini-2.0-flash", 
             config=GenerateContentConfig(
@@ -442,7 +420,7 @@ def extract_project_timeline(client, proposal_text):
                 temperature=0.1
             )
         )
-        response = chat.send_message(user_prompt)
+        response = chat.send_message([pdf_part, user_prompt])
         
         try:
             json_str = response.text
@@ -496,19 +474,17 @@ with tab1:
         with st.spinner("Analyzing your proposal..."):
             client = initialize_genai()
             
-            proposal_text = extract_text_from_pdf(uploaded_file)
-            
-            if proposal_text:
+            if uploaded_file:
                 progress_bar = st.progress(0)
                 
                 progress_bar.progress(20)
-                metrics = analyze_proposal_metrics(client, proposal_text, problem_statement)
+                metrics = analyze_proposal_metrics(client, uploaded_file, problem_statement)
                 
                 progress_bar.progress(40)
-                timeline = extract_project_timeline(client, proposal_text)
+                timeline = extract_project_timeline(client, uploaded_file)
                 
                 progress_bar.progress(70)
-                feedback = get_ai_review(client, proposal_text, problem_statement, reviewer_mode)
+                feedback = get_ai_review(client, uploaded_file, problem_statement, reviewer_mode)
                 
                 progress_bar.progress(100)
                 progress_bar.empty()
@@ -518,7 +494,7 @@ with tab1:
                 st.session_state.feedback = feedback
                 st.session_state.has_feedback = True
             else:
-                st.error("Could not extract text from the PDF. Please try again with a different file.")
+                st.error("Could not process the PDF. Please try again with a different file.")
 
     if 'has_feedback' in st.session_state and st.session_state.has_feedback:
         st.markdown("## Proposal Analysis")
