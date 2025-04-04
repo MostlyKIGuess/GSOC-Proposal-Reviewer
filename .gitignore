@@ -1,2 +1,4 @@
-.env
-.streamlit
+# GENERATED to be safe
+.streamlit/
+__pycache__/
+*.pyc
